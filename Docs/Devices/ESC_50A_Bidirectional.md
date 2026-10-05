@@ -55,7 +55,7 @@ status: beklemede
 | 1500 µs | Dur (nötr) |
 | 2000 µs | Tam ileri |
 
-ESP32 MCPWM ile üretilen sinyal: 50 Hz, 1000–2000 µs. Kod: `Firmware/src/esp32/src/motor.c`
+ESP32 MCPWM ile üretilen sinyal: 50 Hz, 1000–2000 µs. Kod: `Firmware/src/esp32/src/motor.cpp`
 
 ---
 

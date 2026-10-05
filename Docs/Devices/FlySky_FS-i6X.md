@@ -40,7 +40,7 @@ status: alındı
 | Parametre | Değer |
 |-----------|-------|
 | PWM çıkış | CH1–CH6 |
-| iBUS çıkış | SENS soketinden, 14 kanal tek hat |
+| iBUS çıkış | **iBUS SERVO** soketinden, 14 kanal tek hat (SENS soketi telemetri sensörleri içindir) |
 | Besleme | 4.0–6.5 V |
 | Max akım | 100 mA |
 | Sinyal voltajı | 3.3 V (ESP32 doğrudan bağlanır) |
@@ -58,9 +58,12 @@ status: alındı
 | CH5 | 4 | **Arm switch** | SWA / SWD |
 | CH6 | 5 | Yedek | VRA / SWC |
 
-**Kod referansı:** `Firmware/src/esp32/src/control.c`
-- `ibus_get_normalized(2)` → CH3 gaz (−1.0 … 1.0)
-- `ibus_get_normalized(3)` → CH4 yaw (−1.0 … 1.0)
+**Kod referansı:** kanal indeksleri `Firmware/src/esp32/include/config.hpp` (`kChThrottle`, `kChYaw`, `kChArm`), kullanım `Firmware/src/esp32/src/control.cpp`
+- `ibus::normalize(rc.ch[2])` → CH3 gaz (−1.0 … 1.0)
+- `ibus::normalize(rc.ch[3])` → CH4 yaw (−1.0 … 1.0)
+- `rc.ch[4] >= 1700` → CH5 ARM
+
+> FS-i6X'te CH5 varsayılan olarak VRA potuna bağlıdır. Menu → Functions setup → Aux. channels → **Channel 5 = SwA** yap.
 
 ---
 
@@ -74,13 +77,18 @@ status: alındı
 | Checksum | `0xFFFF − sum(byte[0..29])` |
 | Frame hızı | ~142 Hz (7 ms periyot) |
 | Kanal değeri | 1000–2000 (1500 = merkez) |
-| Bağlantı | Alıcı SENS soketi → ESP32 GPIO16 (UART1 RX) |
+| Bağlantı | Alıcı iBUS SERVO soketi → ESP32 GPIO16 (UART1 RX) |
 
 ---
 
 ## Failsafe Yapılandırması
 
-FS-iA6B sinyal kesilince frame göndermeyi durdurmaz — kanal değerlerini preset'e çeker. Firmware `ibus_is_failsafe()` ile 200 ms frame yokluğunu yakalar; ancak **alıcı failsafe değerleri mutlaka ayarlanmalıdır.**
+Failsafe ayarlı FS-iA6B sinyal kesilince frame göndermeyi durdurmaz — kanal değerlerini preset'e çeker. Firmware iki şekilde yakalar:
+
+- **Frame yokluğu:** 200 ms geçerli frame gelmezse (kablo koptu, alıcı enerjisiz, failsafe ayarsız alıcı çıkışı kesti) → `FAILSAFE`, motorlar anında durur.
+- **Preset değerler:** alıcı frame göndermeye devam ediyorsa CH5 = 1000 µs gelir → `DISARMED`, motorlar anında durur.
+
+Bu yüzden **alıcı failsafe değerleri mutlaka ayarlanmalıdır** (özellikle CH5).
 
 **Adımlar:**
 1. Kumanda → Menu → System → RX Setup → Failsafe
@@ -88,13 +96,13 @@ FS-iA6B sinyal kesilince frame göndermeyi durdurmaz — kanal değerlerini pres
 3. CH4 (Yaw) = **1500 µs**
 4. CH5 (Arm) = **1000 µs** (disarm)
 5. Diğer kanallar = merkez
-6. Kaydet ve test et: kumandayı kapat → ESP32 logda 200 ms içinde `FAILSAFE` görünmeli
+6. Kaydet ve test et (pervaneler güvenli konumdayken): ARM et, hafif gaz ver, kumandayı kapat → ESP32 logda `FAILSAFE` veya `ARMED -> DISARMED` görünmeli ve ESC pulse değerleri nötre dönmeli
 
 ---
 
 ## Bind (Eşleştirme) Prosedürü
 
-1. Alıcının **B/VCC** portuna bind plug tak (2 pinli beyaz soket — SENS ile karıştırma)
+1. Alıcının **B/VCC** portuna bind plug tak (2 pinli beyaz soket — iBUS SERVO/SENS ile karıştırma)
 2. Alıcıya güç ver — LED hızlı yanıp söner
 3. Kumanda → Menu → System → RX Bind
 4. Kumandayı aç — eşleşme otomatik tamamlanır

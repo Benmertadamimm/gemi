@@ -66,7 +66,7 @@ ESP32 GPIO18 ──PWM──► ESC Sağ
 
 ## Yönlendirme Mantığı
 
-Diferansiyel thrust ile dönüş (kod: `Firmware/src/esp32/src/control.c`):
+Diferansiyel thrust ile dönüş (kod: `Firmware/src/esp32/include/mixer.hpp`):
 
 ```
 Sol motor  = gaz + yaw
