@@ -14,10 +14,28 @@ inline constexpr int kMotorLeftGpio  = 17;   /* sol thruster ESC sinyali     */
 inline constexpr int kMotorRightGpio = 18;   /* sağ thruster ESC sinyali     */
 inline constexpr int kMcpwmGroup     = 0;
 
-/* ── Kumanda kanalları (0 indeksli: 2 = CH3) ──────────────────────────────── */
-inline constexpr int kChThrottle = 2;   /* CH3 — sol çubuk dikey  */
-inline constexpr int kChYaw      = 3;   /* CH4 — sol çubuk yatay  */
-inline constexpr int kChArm      = 4;   /* CH5 — arm switch (SWA) */
+/* Faz 3 — güç izleme ve güvenlik (ADC1: GPIO1..10, Wi-Fi ile çakışmaz) */
+inline constexpr int kBattVoltageGpio = 4;   /* PDB voltaj çıkışı   → ADC1_CH3 */
+inline constexpr int kCurrentGpio     = 5;   /* PDB Hall akım çıkışı → ADC1_CH4 */
+inline constexpr int kTempGpio        = 6;   /* PDB termistör       → ADC1_CH5 */
+inline constexpr int kKillSwitchGpio  = 7;   /* acil durdurma butonu (NC kontak → GND) */
+inline constexpr int kTelemetryUartNum = 2;  /* UART2, tek tel (half-duplex)  */
+inline constexpr int kTelemetryGpio    = 15; /* FS-iA6B iBUS SENS → GPIO15    */
+
+/* ── Kumanda kanalları (0 indeksli: 1 = CH2) ──────────────────────────────────
+ * FS-i6X'te CH3 (gaz) çubuğu yaylı DEĞİLDİR: bırakınca ortaya dönmez, olduğu yerde
+ * kalır. Çift yönlü (ileri/geri) ESC'de bu, çubuk bırakılınca teknenin gitmeye devam
+ * etmesi demektir. Bu yüzden sürüş, kendiliğinden ortalanan çubuğa alındı:
+ *   CH2 (elevator) = gaz,  CH1 (aileron) = dönüş  → Mode 2'de SAĞ çubuk tek başına sürer.
+ * Kumanda modundan (Mode 1/2) bağımsız olarak CH1, CH2, CH4 yaylıdır; CH3 değildir.
+ * Dönüşü sol çubuğa (CH4, rudder) almak istersen kChYaw = 3 yap.
+ * *Reversed: çubuk ileri itilince log'da gaz negatif görünüyorsa true yap
+ *            (ya da kumandada Functions setup → Reverse). */
+inline constexpr int  kChThrottle       = 1;      /* CH2 — sağ çubuk dikey (yaylı)  */
+inline constexpr int  kChYaw            = 0;      /* CH1 — sağ çubuk yatay (yaylı)  */
+inline constexpr int  kChArm            = 4;      /* CH5 — arm switch (SwA)         */
+inline constexpr bool kThrottleReversed = false;
+inline constexpr bool kYawReversed      = false;
 
 /* ── Arm (motorları devreye alma) ─────────────────────────────────────────────
  * kUseArmSwitch=true : CH5 switch'i ARM konumunda + çubuklar ortada → ARMED.
@@ -58,7 +76,8 @@ inline constexpr uint32_t kEscArmDelayMs  = 2000;  /* boot'ta nötrde bekleme */
 inline constexpr bool kEscCalibrationMode = false;
 
 /* ── Kontrol döngüsü ──────────────────────────────────────────────────────────
- * kDeadzone   : çubuk merkeze dönünce ±bu kadar sapma sıfır sayılır
+ * kDeadzone   : çubuk merkeze dönünce ±bu kadar sapma sıfır sayılır (sonrası
+ *               yeniden ölçeklenir, deadzone kenarında sıçrama olmaz)
  * kMaxThrottle: tam çubukta verilecek max ileri/geri güç (0..1)
  * kMaxYaw     : tam çubukta verilecek max dönüş gücü (0..1)
  * kRamp*      : motor çıkışının saniyedeki max değişimi (1.0 → 0'dan tam güce 1s) */
@@ -68,13 +87,91 @@ enum class MixMode : uint8_t {
 };
 
 inline constexpr uint32_t kControlPeriodMs = 20;   /* 50Hz */
-inline constexpr float    kDeadzone        = 0.01f;
+inline constexpr float    kDeadzone        = 0.03f; /* yaylı çubuk tam 1500'e dönmeyebilir */
 inline constexpr float    kMaxThrottle     = 0.10f;
 inline constexpr float    kMaxYaw          = 0.07f;
 inline constexpr MixMode  kMixMode         = MixMode::ScaleDown;
 inline constexpr bool     kRampEnabled     = false; /* GEÇİCİ: testte kapalı tutuluyor */
 inline constexpr float    kRampRatePerSec  = 1.0f;
 
-inline constexpr uint32_t kLogPeriodMs = 250;  /* telemetri log aralığı */
+inline constexpr uint32_t kLogPeriodMs = 250;  /* kontrol log aralığı */
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * FAZ 3 — GÜÇ VE SAĞLIK İZLEME
+ * Sensör bağlanmadan bir özelliği açma: boşta kalan ADC pini rastgele değer okur.
+ * Devreye alma sırası ve kalibrasyon: Firmware/src/esp32/README.md
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Hangi sensörler bağlı? ───────────────────────────────────────────────── */
+inline constexpr bool kBattSenseEnabled    = false;
+inline constexpr bool kCurrentSenseEnabled = false;
+inline constexpr bool kTempSenseEnabled    = false;
+inline constexpr bool kKillSwitchEnabled   = false;
+inline constexpr bool kTelemetryEnabled    = false;  /* kumanda ekranına voltaj/akım/sıcaklık */
+
+inline constexpr uint32_t kPowerPeriodMs    = 100;   /* ölçüm aralığı (10 Hz)     */
+inline constexpr int      kAdcOversample    = 16;    /* her ölçümde ortalama örnek */
+inline constexpr uint32_t kPowerLogPeriodMs = 5000;  /* periyodik güç logu         */
+
+/* ── Kalibrasyon (TODO: DEGZ PDB çıkışları ölçülüp doğrulanmalı) ───────────────
+ * ESP32 ADC girişi en fazla ~3.1 V. PDB çıkışı bunu aşıyorsa gerilim bölücü şart.
+ *
+ * Voltaj: V_bat = V_adc × kBattVoltsPerVolt + kBattOffsetV
+ *         Kalibrasyon: multimetreyle batarya voltajını ölç, log'daki ham mV ile böl.
+ * Akım  : I = (V_adc − kCurrentZeroV) / kCurrentVoltsPerAmp
+ *         kCurrentZeroV: motorlar dururken log'daki ham mV (Hall sensör sıfır noktası)
+ * Sıcaklık: NTC termistör, seri direnç 3.3V'a (pull-up), NTC GND'ye bağlı varsayılır. */
+inline constexpr float kBattVoltsPerVolt   = 11.0f;   /* örn. 100k/10k bölücü        */
+inline constexpr float kBattOffsetV        = 0.0f;
+inline constexpr float kCurrentZeroV       = 1.65f;   /* çift yönlü Hall: Vcc/2      */
+inline constexpr float kCurrentVoltsPerAmp = 0.0132f; /* 13.2 mV/A (örnek değer)     */
+inline constexpr float kNtcR25Ohm          = 10000.0f;
+inline constexpr float kNtcBeta            = 3950.0f;
+inline constexpr float kNtcSeriesOhm       = 10000.0f;
+inline constexpr float kNtcSupplyV         = 3.3f;
+
+/* ── Batarya (2× 6S LiPo paralel) ─────────────────────────────────────────────
+ * Voltaj yük altında düşer, yük kalkınca toparlanır. Bu yüzden:
+ *  - ölçüm filtrelenir (kBattFilterTauS),
+ *  - eşik kBattDebounceS boyunca kesintisiz aşılmadan seviye düşmez,
+ *  - seviye bir kez düştü mü geri yükselmez (batarya değişene kadar, yani reset).
+ * LOW      : sadece uyarı
+ * LIMIT    : güç kBattLimitScale ile çarpılır
+ * CRITICAL : güç kBattCriticalScale ile çarpılır (0 = dur; "eve dönüş" için örn. 0.2) */
+inline constexpr int   kBattCellCount      = 6;
+inline constexpr float kCellLowV           = 3.50f;  /* 21.0 V */
+inline constexpr float kCellLimitV         = 3.40f;  /* 20.4 V */
+inline constexpr float kCellCriticalV      = 3.30f;  /* 19.8 V */
+inline constexpr float kBattLimitScale     = 0.5f;
+inline constexpr float kBattCriticalScale  = 0.0f;
+inline constexpr float kBattFilterTauS     = 2.0f;
+inline constexpr float kBattDebounceS      = 3.0f;
+inline constexpr float kBattPlausibleMinV  = 12.0f;  /* dışı → sensör arızası, güç kesilmez */
+inline constexpr float kBattPlausibleMaxV  = 27.0f;
+
+/* ── Akım sınırlama (toplam batarya akımı) ────────────────────────────────────
+ * 2 thruster × 35 A sürekli. Ölçülen akım sınırı aşarsa güç yavaşça kısılır,
+ * altına inince yavaşça geri verilir. Kısa devre koruması sigortanın (ANL) işidir. */
+inline constexpr float kCurrentLimitA          = 60.0f;
+inline constexpr float kCurrentMinScale        = 0.2f;
+inline constexpr float kCurrentDropPerSec      = 1.0f;
+inline constexpr float kCurrentRecoverPerSec   = 0.2f;
+inline constexpr float kCurrentFilterTauS      = 0.2f;
+inline constexpr float kCurrentPlausibleMaxA   = 250.0f;
+
+/* ── Sıcaklık (PDB termistörü) ────────────────────────────────────────────────
+ * kTempDerateStartC → kTempDerateEndC arasında güç doğrusal olarak kTempMinScale'e iner. */
+inline constexpr float kTempWarnC         = 60.0f;
+inline constexpr float kTempDerateStartC  = 70.0f;
+inline constexpr float kTempDerateEndC    = 85.0f;
+inline constexpr float kTempMinScale      = 0.0f;
+inline constexpr float kTempFilterTauS    = 2.0f;
+
+/* ── Acil durdurma (kill switch) ──────────────────────────────────────────────
+ * NC (normalde kapalı) buton GPIO ile GND arasında, dahili pull-up açık:
+ * butona basılırsa VEYA kablo koparsa pin HIGH olur → KILLED.
+ * Bırakıldıktan sonra tekrar sürmek için CH5 switch kapat-aç gerekir. */
+inline constexpr bool     kKillActiveHigh   = true;
+inline constexpr uint32_t kKillDebounceMs   = 60;
 
 }  // namespace cfg

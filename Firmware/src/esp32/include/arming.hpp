@@ -9,6 +9,8 @@
  *                                                   ▼   │
  *                                                  ARMED
  *   DISARMED / ARMED ── link koptu ──► FAILSAFE ── link geldi ──► DISARMED
+ *   herhangi bir durum ── kill switch ──► KILLED ── bırakıldı ──► DISARMED
+ *                                         (tekrar arm için switch kapat-aç şart)
  *
  * Motorlar sadece ARMED durumunda döner; diğer tüm durumlarda nötr. */
 
@@ -16,7 +18,7 @@
 
 namespace arming {
 
-enum class State : uint8_t { WaitLink, Disarmed, Armed, Failsafe };
+enum class State : uint8_t { WaitLink, Disarmed, Armed, Failsafe, Killed };
 
 inline const char *to_string(State s)
 {
@@ -25,6 +27,7 @@ inline const char *to_string(State s)
         case State::Disarmed: return "DISARMED";
         case State::Armed:    return "ARMED";
         case State::Failsafe: return "FAILSAFE";
+        case State::Killed:   return "KILLED";
     }
     return "?";
 }
@@ -33,6 +36,7 @@ struct Input {
     bool link_ok;          /* taze ve geçerli iBUS frame var mı   */
     bool arm_switch_on;    /* CH5 ARM konumunda mı                 */
     bool sticks_centered;  /* gaz ve yaw çubukları ortada mı       */
+    bool kill = false;     /* acil durdurma butonu aktif mi        */
 };
 
 struct Options {
@@ -46,6 +50,13 @@ public:
 
     State update(const Input &in)
     {
+        if (in.kill) {
+            state_           = State::Killed;
+            switch_seen_off_ = false;  /* bırakınca kendiliğinden kalkmasın */
+            return state_;
+        }
+        if (state_ == State::Killed) state_ = in.link_ok ? State::Disarmed : State::Failsafe;
+
         if (!in.link_ok) {
             if (state_ == State::Armed || state_ == State::Disarmed) {
                 state_ = State::Failsafe;
@@ -80,6 +91,31 @@ private:
     Options opt_;
     State   state_           = State::WaitLink;
     bool    switch_seen_off_ = false;
+};
+
+/* Dijital giriş için debounce: değer ancak `required` ardışık örnek boyunca
+ * aynı kalırsa değişir. Başlangıç değeri `initial`. */
+class Debouncer {
+public:
+    Debouncer(uint32_t required, bool initial) : required_(required), stable_(initial) {}
+
+    bool update(bool raw)
+    {
+        if (raw == stable_) {
+            count_ = 0;
+        } else if (++count_ >= required_) {
+            stable_ = raw;
+            count_  = 0;
+        }
+        return stable_;
+    }
+
+    bool value() const { return stable_; }
+
+private:
+    uint32_t required_;
+    uint32_t count_ = 0;
+    bool     stable_;
 };
 
 }  // namespace arming

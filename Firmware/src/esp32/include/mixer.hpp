@@ -17,10 +17,13 @@ struct Output {
     float right;
 };
 
-/* Merkeze yakın küçük sapmaları sıfırlar. */
+/* Merkeze yakın küçük sapmaları sıfırlar, kalan aralığı 0..1'e yeniden ölçekler
+ * (deadzone kenarında çıkış 0'dan başlar, sıçrama olmaz; tam çubuk yine 1.0). */
 inline float apply_deadzone(float v, float deadzone)
 {
-    return std::fabs(v) < deadzone ? 0.0f : v;
+    const float mag = std::fabs(v);
+    if (mag <= deadzone) return 0.0f;
+    return std::copysign(std::min((mag - deadzone) / (1.0f - deadzone), 1.0f), v);
 }
 
 /* throttle, yaw: -1..1. Çıkış her zaman -1..1 aralığındadır. */

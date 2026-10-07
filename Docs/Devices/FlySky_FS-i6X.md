@@ -51,19 +51,33 @@ status: alındı
 
 | Kanal | İndeks | Fonksiyon | Kumanda Kontrolü |
 |-------|--------|-----------|-----------------|
-| CH1 | 0 | Yedek (Roll) | Sağ çubuk yatay |
-| CH2 | 1 | Yedek (Pitch) | Sağ çubuk dikey |
-| CH3 | 2 | **Gaz** | Sol çubuk dikey |
-| CH4 | 3 | **Yaw (dönüş)** | Sol çubuk yatay |
-| CH5 | 4 | **Arm switch** | SWA / SWD |
-| CH6 | 5 | Yedek | VRA / SWC |
+| Kanal | İndeks | Fonksiyon | Kumanda Kontrolü (Mode 2) | Yaylı mı? |
+|-------|--------|-----------|---------------------------|-----------|
+| CH1 | 0 | **Yaw (dönüş)** | Sağ çubuk yatay | Evet |
+| CH2 | 1 | **Gaz (ileri/geri)** | Sağ çubuk dikey | Evet |
+| CH3 | 2 | Kullanılmıyor | Sol çubuk dikey | **Hayır** |
+| CH4 | 3 | Yedek (alternatif yaw) | Sol çubuk yatay | Evet |
+| CH5 | 4 | **Arm switch** | SwA (Aux ataması gerekir) | — |
+| CH6 | 5 | Yedek (Faz 4: toplama mekanizması) | VrB | — |
 
-**Kod referansı:** kanal indeksleri `Firmware/src/esp32/include/config.hpp` (`kChThrottle`, `kChYaw`, `kChArm`), kullanım `Firmware/src/esp32/src/control.cpp`
-- `ibus::normalize(rc.ch[2])` → CH3 gaz (−1.0 … 1.0)
-- `ibus::normalize(rc.ch[3])` → CH4 yaw (−1.0 … 1.0)
-- `rc.ch[4] >= 1700` → CH5 ARM
+> **Neden CH3 değil?** FS-i6X'in gaz çubuğu (CH3) yaylı değildir: bırakınca ortaya
+> dönmez, olduğu yerde kalır. Çift yönlü ESC'de 1500 µs = dur olduğu için bu çubukla
+> sürmek, çubuk bırakılınca teknenin gitmeye devam etmesi ve "dur" noktasının elle
+> bulunmak zorunda kalınması demektir. Bu yüzden sürüş kendiliğinden ortalanan sağ
+> çubuğa alındı: **çubuğu bırakmak = dur.** Mode 1 kumandada da CH1/CH2 yaylıdır,
+> kod değişmez (sadece fiziksel taraf değişir).
 
-> FS-i6X'te CH5 varsayılan olarak VRA potuna bağlıdır. Menu → Functions setup → Aux. channels → **Channel 5 = SwA** yap.
+**Kod referansı:** kanal indeksleri ve yön çevirme `Firmware/src/esp32/include/config.hpp`
+(`kChThrottle`, `kChYaw`, `kChArm`, `kThrottleReversed`, `kYawReversed`), kullanım
+`Firmware/src/esp32/src/control.cpp`.
+
+**Kumanda ayarları (bir kez yapılır):**
+1. Menu → Functions setup → Aux. channels → **Channel 5 = SwA** (varsayılan VrA potudur)
+2. Menu → System → RX setup → Output mode → **Serial: i-BUS**
+3. Çubuk yönü testi: sağ çubuğu ileri it → ESP32 logunda `gaz=+...` görünmeli; sağa it →
+   `yaw=+...`. Ters ise Functions setup → Reverse'den ilgili kanalı çevir
+   (veya `config.hpp`'de `kThrottleReversed` / `kYawReversed`).
+4. Subtrim / trim sıfır olmalı (çubuk merkezde ≈1500 µs).
 
 ---
 
@@ -92,11 +106,29 @@ Bu yüzden **alıcı failsafe değerleri mutlaka ayarlanmalıdır** (özellikle 
 
 **Adımlar:**
 1. Kumanda → Menu → System → RX Setup → Failsafe
-2. CH3 (Gaz) = **1500 µs** (nötr = dur)
-3. CH4 (Yaw) = **1500 µs**
-4. CH5 (Arm) = **1000 µs** (disarm)
+2. CH1 (Yaw) = **1500 µs** — sağ çubuk ortada iken ayarla
+3. CH2 (Gaz) = **1500 µs** (nötr = dur)
+4. CH5 (Arm) = **1000 µs** (disarm) — SwA kapalıyken ayarla
 5. Diğer kanallar = merkez
 6. Kaydet ve test et (pervaneler güvenli konumdayken): ARM et, hafif gaz ver, kumandayı kapat → ESP32 logda `FAILSAFE` veya `ARMED -> DISARMED` görünmeli ve ESC pulse değerleri nötre dönmeli
+
+---
+
+## Telemetri (iBUS SENS) — Faz 3
+
+ESP32, alıcının **SENS** soketine "sensör" gibi bağlanır; batarya voltajı, PDB sıcaklığı
+ve akım kumanda ekranında görünür (Menu → System → Display sensors).
+
+| Parametre | Değer |
+|-----------|-------|
+| Bağlantı | SENS sinyal pini → ESP32 GPIO15 (UART2, tek tel, open-drain) |
+| Protokol | 115200 8N1, half-duplex; alıcı sorgular, ESP32 cevaplar |
+| Sensör 1 | Ext.V — batarya voltajı (0.01 V) |
+| Sensör 2 | Temp — PDB sıcaklığı |
+| Sensör 3 | Akım (tip 0x05) — stok FS-i6X yazılımında görünmeyebilir |
+
+> SENS hattı voltajını bağlamadan önce multimetreyle ölç; 3.3 V'u aşıyorsa
+> seviye dönüştürücü kullan. Firmware'de `kTelemetryEnabled = true` yap.
 
 ---
 

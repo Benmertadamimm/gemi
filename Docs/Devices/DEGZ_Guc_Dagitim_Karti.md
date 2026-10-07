@@ -42,10 +42,19 @@ status: alındı
 
 | Port | Sinyal | ESP32 Bağlantısı |
 |------|--------|-----------------|
-| Voltaj | Batarya gerilimi (anlık) | ADC (TBD) |
-| Hall Effect | Akım yönü + şiddeti | ADC veya UART (TBD) |
-| Termistör | Sıcaklık | ADC (TBD) |
-| On/Off | Kart açma/kapama | GPIO (opsiyonel) |
+| Voltaj | Batarya gerilimi (anlık) | GPIO4 (ADC1_CH3) |
+| Hall Effect | Akım yönü + şiddeti | GPIO5 (ADC1_CH4) |
+| Termistör | Sıcaklık | GPIO6 (ADC1_CH5) |
+| On/Off | Kart açma/kapama | Fiziksel acil durdurma anahtarı (ESP32'ye değil) |
+
+> **TODO — bağlamadan önce doğrula:** JST pin sırası ve çıkış voltaj aralıkları
+> üreticiden/ölçümle teyit edilmeli. ESP32 ADC girişi en fazla ~3.1 V'tur;
+> çıkış bunu aşıyorsa gerilim bölücü şart. Ölçek katsayıları
+> `Firmware/src/esp32/include/config.hpp` → "Kalibrasyon" bölümünde.
+>
+> On/Off hattı kartın kendisini kapatır, yani ESP32'nin beslemesini de keser;
+> bu yüzden yazılımla değil, teknedeki fiziksel acil durdurma anahtarıyla kullanılır.
+> Yazılımsal acil durdurma için ayrı buton GPIO7'ye bağlanır.
 
 ---
 

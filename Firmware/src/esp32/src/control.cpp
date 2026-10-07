@@ -3,6 +3,8 @@
 #include <cmath>
 
 #include "config.hpp"
+#include "driver/gpio.h"
+#include "esp_check.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -32,15 +34,30 @@ bool channels_valid(const ibus::Channels &ch)
 
 }  // namespace
 
-Controller::Controller(ibus::Receiver &rc, MotorDriver &motors)
+Controller::Controller(ibus::Receiver &rc, MotorDriver &motors, PowerMonitor &power)
     : rc_(rc),
       motors_(motors),
-      fsm_({cfg::kUseArmSwitch, cfg::kRequireSwitchCycleAfterFailsafe})
+      power_(power),
+      fsm_({cfg::kUseArmSwitch, cfg::kRequireSwitchCycleAfterFailsafe}),
+      /* başlangıçta "basılı" kabul et: bırakıldığı doğrulanmadan sürüş yok */
+      kill_(cfg::kKillDebounceMs / cfg::kControlPeriodMs + 1, true)
 {
 }
 
 esp_err_t Controller::start()
 {
+    if (cfg::kKillSwitchEnabled) {
+        gpio_config_t io = {};
+        io.pin_bit_mask = 1ULL << cfg::kKillSwitchGpio;
+        io.mode         = GPIO_MODE_INPUT;
+        io.pull_up_en   = cfg::kKillActiveHigh ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE;
+        io.pull_down_en = cfg::kKillActiveHigh ? GPIO_PULLDOWN_DISABLE : GPIO_PULLDOWN_ENABLE;
+        ESP_RETURN_ON_ERROR(gpio_config(&io), TAG, "kill switch gpio");
+        ESP_LOGI(TAG, "Kill switch: GPIO%d", cfg::kKillSwitchGpio);
+    } else {
+        ESP_LOGW(TAG, "Kill switch kapali (config.hpp)");
+    }
+
     if (xTaskCreate(&Controller::task_entry, "control", kTaskStack, this, kTaskPriority, nullptr) != pdPASS) {
         ESP_LOGE(TAG, "task olusturulamadi");
         return ESP_ERR_NO_MEM;
@@ -71,13 +88,14 @@ void Controller::step(uint32_t now)
     const bool values_ok = channels_valid(rc.ch);
     const bool link_ok   = rc.has_frame && rc.age_ms <= cfg::kRcTimeoutMs && values_ok;
 
-    const float throttle_raw = ibus::normalize(rc.ch[cfg::kChThrottle]);
-    const float yaw_raw      = ibus::normalize(rc.ch[cfg::kChYaw]);
+    const float throttle_raw = ibus::normalize(rc.ch[cfg::kChThrottle]) * (cfg::kThrottleReversed ? -1.0f : 1.0f);
+    const float yaw_raw      = ibus::normalize(rc.ch[cfg::kChYaw]) * (cfg::kYawReversed ? -1.0f : 1.0f);
 
     const arming::Input in{
         link_ok,
         rc.ch[cfg::kChArm] >= cfg::kArmSwitchThresholdUs,
         std::fabs(throttle_raw) <= cfg::kArmStickTolerance && std::fabs(yaw_raw) <= cfg::kArmStickTolerance,
+        read_kill(),
     };
 
     if (!esc_ready_ && now - start_ms_ >= cfg::kEscArmDelayMs) {
@@ -92,6 +110,7 @@ void Controller::step(uint32_t now)
 
     float throttle = 0.0f;
     float yaw      = 0.0f;
+    const float power_scale = power_.status().power_scale;
 
     if (st != arming::State::Armed) {
         /* FAILSAFE / DISARMED / WAIT_LINK: rampa yok, anında nötr */
@@ -101,7 +120,10 @@ void Controller::step(uint32_t now)
     } else {
         throttle = mixer::apply_deadzone(throttle_raw, cfg::kDeadzone) * cfg::kMaxThrottle;
         yaw      = mixer::apply_deadzone(yaw_raw, cfg::kDeadzone) * cfg::kMaxYaw;
-        const mixer::Output target = mixer::mix(throttle, yaw, cfg::kMixMode);
+        mixer::Output target = mixer::mix(throttle, yaw, cfg::kMixMode);
+        /* Faz 3: düşük batarya / aşırı akım / sıcaklık güç sınırlaması */
+        target.left  *= power_scale;
+        target.right *= power_scale;
 
         if (cfg::kRampEnabled) {
             const float step_max = cfg::kRampRatePerSec * (cfg::kControlPeriodMs / 1000.0f);
@@ -116,8 +138,15 @@ void Controller::step(uint32_t now)
 
     if (now - last_log_ms_ >= cfg::kLogPeriodMs) {
         last_log_ms_ = now;
-        log_status(st, rc, throttle, yaw);
+        log_status(st, rc, throttle, yaw, power_scale);
     }
+}
+
+bool Controller::read_kill()
+{
+    if (!cfg::kKillSwitchEnabled) return false;
+    const bool level = gpio_get_level(static_cast<gpio_num_t>(cfg::kKillSwitchGpio)) != 0;
+    return kill_.update(level == cfg::kKillActiveHigh);
 }
 
 void Controller::log_transition(arming::State from, arming::State to, const ibus::Snapshot &rc, bool values_ok)
@@ -126,7 +155,11 @@ void Controller::log_transition(arming::State from, arming::State to, const ibus
     const char *f = arming::to_string(from);
     const char *t = arming::to_string(to);
 
-    if (to == State::Failsafe) {
+    if (to == State::Killed) {
+        ESP_LOGW(TAG, "%s -> %s: ACIL DURDURMA — MOTORLAR DURDURULDU", f, t);
+    } else if (from == State::Killed) {
+        ESP_LOGW(TAG, "%s -> %s: acil durdurma birakildi — tekrar arm icin CH5 kapat-ac", f, t);
+    } else if (to == State::Failsafe) {
         if (!values_ok && rc.age_ms <= cfg::kRcTimeoutMs) {
             ESP_LOGW(TAG, "%s -> %s: kanal degeri gecersiz — MOTORLAR DURDURULDU", f, t);
         } else {
@@ -142,12 +175,13 @@ void Controller::log_transition(arming::State from, arming::State to, const ibus
     }
 }
 
-void Controller::log_status(arming::State st, const ibus::Snapshot &rc, float throttle, float yaw)
+void Controller::log_status(arming::State st, const ibus::Snapshot &rc, float throttle, float yaw,
+                            float power_scale)
 {
     const MotorDriver::Pulses p = motors_.last_pulses();
-    ESP_LOGI(TAG, "%-9s gaz=%+.2f yaw=%+.2f | L=%+.2f R=%+.2f | %lu/%luus | rc yas=%ldms frame=%lu err=%lu",
+    ESP_LOGI(TAG, "%-9s gaz=%+.2f yaw=%+.2f guc=%.2f | L=%+.2f R=%+.2f | %lu/%luus | rc yas=%ldms frame=%lu err=%lu",
              arming::to_string(st), static_cast<double>(throttle), static_cast<double>(yaw),
-             static_cast<double>(out_left_), static_cast<double>(out_right_),
+             static_cast<double>(power_scale), static_cast<double>(out_left_), static_cast<double>(out_right_),
              static_cast<unsigned long>(p.left_us), static_cast<unsigned long>(p.right_us),
              rc.has_frame ? static_cast<long>(rc.age_ms) : -1L,
              static_cast<unsigned long>(rc.frame_count), static_cast<unsigned long>(rc.error_count));

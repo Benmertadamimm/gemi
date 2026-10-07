@@ -38,22 +38,30 @@ Projenin her aşamasında geçerli. Yeni bir özellik eklenirken bunlar bozulmam
 - [x] Arm/disarm durum makinesi (CH5 switch, ani kalkış koruması)
 - [x] **Kumanda bağlantısı kopunca motorların durması** (3 katmanlı failsafe; bkz. firmware README)
 - [x] PC'de çalışan mantık testleri (`host_tests/`)
+- [x] FlySky düzeltmesi: sürüş yaylı sağ çubuğa (CH2 gaz, CH1 dönüş) alındı — CH3 gaz çubuğu ortaya dönmüyor
 
 ## Faz 2 — Tezgah ve Havuz Testleri
 
-- [ ] FS-i6X: CH5 = SwA ataması, alıcı failsafe ayarı (CH3/CH4 = 1500, CH5 = 1000)
+- [ ] FS-i6X: CH5 = SwA ataması, Output mode = i-BUS, alıcı failsafe ayarı (CH1/CH2 = 1500, CH5 = 1000)
+- [ ] Çubuk yönü: sağ çubuk ileri → log'da `gaz=+`, sağa → `yaw=+` (değilse `kThrottleReversed` / `kYawReversed`)
 - [ ] ESC kalibrasyonu (`kEscCalibrationMode`), nötr trim ayarı (`kLeftTrimUs` / `kRightTrimUs`)
 - [ ] Motor yön kontrolü (`kLeftReversed` / `kRightReversed`)
 - [ ] Failsafe testleri: kumandayı kapat, alıcı kablosunu çek, alıcının enerjisini kes → her durumda motorlar durmalı
 - [ ] Havuzda düşük limitle (`kMaxThrottle = 0.10`) sürüş, sonra limitlerin kademeli artırılması
 - [ ] Rampa açık/kapalı karşılaştırması (`kRampEnabled`)
 
-## Faz 3 — Güç ve Sağlık İzleme (ESP32)
+## Faz 3 — Güç ve Sağlık İzleme (ESP32) ✅ (kod hazır, sensörler bağlanınca açılacak)
 
-- [ ] PDB voltaj/akım/sıcaklık okuma (ADC1 pinleri; ADC2 Wi-Fi ile çakışır)
-- [ ] Düşük batarya: önce güç sınırlama, sonra güvenli durdurma (6S cutoff 19.8 V)
-- [ ] Fiziksel kill switch / PDB On-Off hattı
-- [ ] Telemetri: iBUS-sens ile kumandaya batarya voltajı (opsiyonel)
+- [x] PDB voltaj/akım/sıcaklık okuma (ADC1: GPIO4/5/6, oversampling + eFuse kalibrasyonu)
+- [x] Düşük batarya: DUSUK (uyarı) → LIMIT (%50 güç) → KRITIK (dur); filtre + 3 sn debounce + kilit
+- [x] Akım sınırlama (60 A üstünde güç yumuşakça kısılır) ve sıcaklık ile güç azaltma (70→85 °C)
+- [x] Yazılımsal acil durdurma butonu (GPIO7, NC kontak: kablo koparsa da durur)
+- [x] Telemetri: iBUS SENS ile kumanda ekranına voltaj / sıcaklık / akım (GPIO15)
+- [x] Sensör arızası güç kesmez, sadece uyarır (denizde kablo koparsa tekne mahsur kalmasın)
+- [ ] PDB JST çıkışlarının pin sırası ve voltaj aralığının doğrulanması (ADC en fazla ~3.1 V)
+- [ ] Kalibrasyon: voltaj katsayısı, akım sıfır noktası ve mV/A, termistör parametreleri
+- [ ] PDB On/Off hattına fiziksel acil durdurma anahtarı
+- [ ] Sensörleri tek tek `config.hpp`'den açıp test etmek (sıra: firmware README)
 
 ## Faz 4 — Çöp Toplama Mekanizması
 
@@ -84,6 +92,7 @@ Projenin her aşamasında geçerli. Yeni bir özellik eklenirken bunlar bozulmam
 - [ ] Asistli: kumandayla gaz, kamera hedefe doğru yaw düzeltmesi yapar
 - [ ] Otonom: çöpü bul → yaklaş → topla → aramaya devam et
 - [ ] GPS (NEO-7M) + IMU: rota tutma, sanal çit (geofence), eve dönüş
+      (UART'lar dolu: konsol USB-JTAG'a taşınıp UART0 GPS'e verilecek)
 - [ ] Kumanda çubuğu hareket ederse otonom mod anında devre dışı kalır
 
 ## Faz 8 — Saha ve Dayanıklılık
