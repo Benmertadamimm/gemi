@@ -24,10 +24,22 @@ batarya, akım ve sıcaklığı izleyip gücü sınırlar. ESP-IDF 6.0, C++, Pla
 
 ## Derleme ve Yükleme
 
+VS Code + PlatformIO: **File → Open Folder** ile bu klasörü (`Firmware/src/esp32`,
+`platformio.ini`'nin olduğu yer) aç; alttaki çubukta ✓ = derle, → = yükle, 🔌 = log.
+
 ```bash
 pio run -t upload        # derle + yükle
 pio device monitor       # log (115200)
 ```
+
+> **Klasör yolu sadece İngilizce harf, rakam, `-` ve `_` içermeli.**
+> - Türkçe karakter (`Masaüstü`, `Kaan'ın`...) → GCC yolu bozar, derleme başarısız olur.
+> - Boşluk → PlatformIO "whitespace character" hatası verir.
+> - `[` `]` → eskiden "Couldn't find the main target" hatasına yol açıyordu.
+>
+> Önerilen: `C:\projeler\gemi`. Klasörü taşıdıktan sonra eski `.pio` klasörünü sil.
+>
+> Yeni bir `.cpp` dosyası eklersen `src/CMakeLists.txt` listesine de ekle.
 
 Mantık testleri (ESP32 gerekmez):
 
